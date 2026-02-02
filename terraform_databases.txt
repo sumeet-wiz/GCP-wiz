@@ -1,0 +1,284 @@
+# databases.tf - Database Services with Misconfigurations
+
+# Cloud SQL MySQL with misconfigurations
+resource "google_sql_database_instance" "vulnerable_mysql" {
+  name             = "csmp-test-vulnerable-mysql"
+  database_version = "MYSQL_8_0"
+  region           = var.region
+
+  settings {
+    tier = "db-f1-micro"
+
+    # MISCONFIGURATION: Public IP enabled
+    ip_configuration {
+      ipv4_enabled = true
+      
+      # MISCONFIGURATION: Allow all IPs
+      authorized_networks {
+        value = "0.0.0.0/0"
+        name  = "allow-all"
+      }
+      
+      # MISCONFIGURATION: SSL not required
+      require_ssl = false
+      
+      # MISCONFIGURATION: Private IP not enabled
+      private_network = null
+    }
+
+    # MISCONFIGURATION: No automated backups
+    backup_configuration {
+      enabled                        = false
+      start_time                     = "03:00"
+      point_in_time_recovery_enabled = false
+      backup_retention_settings {
+        retained_backups = 0
+      }
+    }
+
+    # MISCONFIGURATION: Maintenance window not defined
+    # MISCONFIGURATION: No high availability
+    availability_type = "ZONAL"
+    
+    # MISCONFIGURATION: No encryption at rest with customer-managed keys
+    # Uses Google-managed encryption only
+    
+    # MISCONFIGURATION: Database flags with insecure settings
+    database_flags {
+      name  = "log_bin_trust_function_creators"
+      value = "on"
+    }
+    
+    database_flags {
+      name  = "local_infile"
+      value = "on"  # Allows loading local files - security risk
+    }
+    
+    database_flags {
+      name  = "general_log"
+      value = "off"  # Logging disabled
+    }
+    
+    # MISCONFIGURATION: No deletion protection
+    deletion_protection_enabled = false
+    
+    # MISCONFIGURATION: Disk autoresize disabled
+    disk_autoresize       = false
+    disk_autoresize_limit = 0
+    disk_size             = 10
+    disk_type             = "PD_SSD"
+    
+    # MISCONFIGURATION: Pricing plan not specified (uses per-use)
+    pricing_plan = "PER_USE"
+    
+    # MISCONFIGURATION: User labels with sensitive information
+    user_labels = {
+      environment      = "test"
+      contains-pii     = "true"
+      backup-enabled   = "false"
+      encryption-level = "low"
+    }
+  }
+
+  # MISCONFIGURATION: No deletion protection at instance level
+  deletion_protection = false
+}
+
+# Cloud SQL PostgreSQL with different misconfigurations
+resource "google_sql_database_instance" "vulnerable_postgres" {
+  name             = "csmp-test-vulnerable-postgres"
+  database_version = "POSTGRES_14"
+  region           = var.region
+
+  settings {
+    tier = "db-g1-small"
+
+    ip_configuration {
+      ipv4_enabled = true
+      
+      # MISCONFIGURATION: Specific but overly broad IP ranges
+      authorized_networks {
+        value = "10.0.0.0/8"
+        name  = "private-range-1"
+      }
+      authorized_networks {
+        value = "172.16.0.0/12"
+        name  = "private-range-2"
+      }
+      authorized_networks {
+        value = "192.168.0.0/16"
+        name  = "private-range-3"
+      }
+      
+      require_ssl = false
+    }
+
+    backup_configuration {
+      enabled                        = true
+      start_time                     = "02:00"
+      # MISCONFIGURATION: Point-in-time recovery disabled
+      point_in_time_recovery_enabled = false
+      
+      # MISCONFIGURATION: Short backup retention
+      backup_retention_settings {
+        retained_backups = 1
+        retention_unit   = "COUNT"
+      }
+    }
+
+    # MISCONFIGURATION: Maintenance window during business hours
+    maintenance_window {
+      day         = 2  # Tuesday
+      hour        = 14 # 2 PM
+      update_track = "stable"
+    }
+
+    # MISCONFIGURATION: Insecure database flags
+    database_flags {
+      name  = "log_statement"
+      value = "none"  # No statement logging
+    }
+    
+    database_flags {
+      name  = "log_min_duration_statement"
+      value = "-1"  # Disabled
+    }
+    
+    database_flags {
+      name  = "shared_preload_libraries"
+      value = "pg_stat_statements,auto_explain"
+    }
+
+    user_labels = {
+      database-type = "postgres"
+      security-scan = "failed"
+    }
+  }
+
+  deletion_protection = false
+}
+
+# Create databases with misconfigurations
+resource "google_sql_database" "vulnerable_db" {
+  name     = "vulnerable_app_db"
+  instance = google_sql_database_instance.vulnerable_mysql.name
+  
+  # MISCONFIGURATION: No charset specified
+  # MISCONFIGURATION: No collation specified
+}
+
+resource "google_sql_database" "sensitive_db" {
+  name     = "sensitive_customer_data"
+  instance = google_sql_database_instance.vulnerable_postgres.name
+}
+
+# Create database users with misconfigurations
+resource "google_sql_user" "mysql_admin" {
+  name     = "admin"
+  instance = google_sql_database_instance.vulnerable_mysql.name
+  # MISCONFIGURATION: Weak password
+  password = "admin123"
+  host     = "%"  # MISCONFIGURATION: Allow from any host
+}
+
+resource "google_sql_user" "mysql_app_user" {
+  name     = "app_user"
+  instance = google_sql_database_instance.vulnerable_mysql.name
+  # MISCONFIGURATION: Weak password
+  password = "vulnerable_pass_456"
+  host     = "%"
+}
+
+resource "google_sql_user" "postgres_admin" {
+  name     = "postgres_admin"
+  instance = google_sql_database_instance.vulnerable_postgres.name
+  # MISCONFIGURATION: Default admin username
+  password = "vulnerable_postgres_pass"
+}
+
+# Firestore database with misconfigurations
+resource "google_firestore_database" "vulnerable_firestore" {
+  project     = var.project_id
+  name        = "(default)"
+  location_id = "us-central"
+  type        = "FIRESTORE_NATIVE"
+
+  # MISCONFIGURATION: No point-in-time recovery
+  point_in_time_recovery_enablement = "POINT_IN_TIME_RECOVERY_DISABLED"
+  
+  # MISCONFIGURATION: No app engine integration restrictions
+  app_engine_integration_mode = "ENABLED"
+  
+  # MISCONFIGURATION: No concurrency mode specified (uses optimistic)
+  concurrency_mode = "OPTIMISTIC"
+  
+  # MISCONFIGURATION: No deletion policy
+  delete_protection_state = "DELETE_PROTECTION_DISABLED"
+}
+
+# Cloud Spanner instance with misconfigurations
+resource "google_spanner_instance" "vulnerable_spanner" {
+  config       = "regional-us-central1"
+  display_name = "CSMP Test Vulnerable Spanner"
+  name         = "csmp-test-vulnerable-spanner"
+  num_nodes    = 1
+
+  # MISCONFIGURATION: No labels for classification
+  labels = {
+    environment = "test"
+    cost-center = "engineering"
+    contains-sensitive-data = "true"
+  }
+}
+
+resource "google_spanner_database" "vulnerable_spanner_db" {
+  instance = google_spanner_instance.vulnerable_spanner.name
+  name     = "vulnerable_spanner_database"
+  
+  # MISCONFIGURATION: No encryption at rest with customer keys
+  # MISCONFIGURATION: No backup schedule
+  
+  ddl = [
+    "CREATE TABLE users (user_id INT64 NOT NULL, username STRING(255), email STRING(255), ssn STRING(11)) PRIMARY KEY(user_id)",
+    "CREATE TABLE payments (payment_id INT64 NOT NULL, user_id INT64, credit_card STRING(16), amount FLOAT64) PRIMARY KEY(payment_id)",
+  ]
+}
+
+# Cloud Bigtable instance with misconfigurations  
+resource "google_bigtable_instance" "vulnerable_bigtable" {
+  name         = "csmp-test-vulnerable-bigtable"
+  display_name = "CSMP Test Vulnerable Bigtable"
+
+  cluster {
+    cluster_id   = "vulnerable-cluster"
+    zone         = var.zone
+    num_nodes    = 1
+    storage_type = "SSD"
+    
+    # MISCONFIGURATION: No autoscaling configured
+    # MISCONFIGURATION: No encryption at rest with customer keys
+  }
+
+  # MISCONFIGURATION: No backup policy
+  # MISCONFIGURATION: Instance type not optimized
+
+  labels = {
+    environment = "test"
+    data-classification = "sensitive"
+  }
+}
+
+resource "google_bigtable_table" "vulnerable_bt_table" {
+  name          = "vulnerable_user_data"
+  instance_name = google_bigtable_instance.vulnerable_bigtable.name
+
+  column_family {
+    family = "personal_info"
+    # MISCONFIGURATION: No garbage collection policy
+  }
+  
+  column_family {
+    family = "financial_data"
+    # MISCONFIGURATION: No garbage collection policy
+  }
+}

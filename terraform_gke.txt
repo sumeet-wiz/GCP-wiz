@@ -1,0 +1,241 @@
+# gke.tf - Google Kubernetes Engine with Misconfigurations
+
+# GKE Cluster with misconfigurations
+resource "google_container_cluster" "vulnerable_gke" {
+  name     = "csmp-test-vulnerable-gke"
+  location = var.zone
+
+  # MISCONFIGURATION: Legacy ABAC enabled (deprecated)
+  enable_legacy_abac = true
+
+  # MISCONFIGURATION: Basic authentication enabled
+  master_auth {
+    username = "admin"
+    password = "vulnerable123"
+
+    client_certificate_config {
+      issue_client_certificate = true # MISCONFIGURATION: Client certs enabled
+    }
+  }
+
+  # MISCONFIGURATION: Private cluster disabled
+  private_cluster_config {
+    enable_private_nodes    = false
+    enable_private_endpoint = false
+  }
+
+  # MISCONFIGURATION: Network policy disabled
+  network_policy {
+    enabled  = false
+    provider = "PROVIDER_UNSPECIFIED"
+  }
+
+  # MISCONFIGURATION: Workload Identity disabled
+  workload_identity_config {
+    workload_pool = ""
+  }
+
+  # MISCONFIGURATION: Monitoring and logging disabled
+  logging_service    = "none"
+  monitoring_service = "none"
+
+  # MISCONFIGURATION: No resource usage export
+  resource_usage_export_config {
+    enable_network_egress_metering       = false
+    enable_resource_consumption_metering = false
+  }
+
+  initial_node_count       = 1
+  remove_default_node_pool = true
+
+  # MISCONFIGURATION: Master authorized networks allow all
+  master_authorized_networks_config {
+    cidr_blocks {
+      cidr_block   = "0.0.0.0/0"
+      display_name = "Allow all"
+    }
+  }
+
+  # MISCONFIGURATION: No IP allocation policy (uses default)
+  # MISCONFIGURATION: No maintenance policy defined
+  
+  # MISCONFIGURATION: Addons with insecure configurations
+  addons_config {
+    http_load_balancing {
+      disabled = true # Disabling useful security features
+    }
+    
+    horizontal_pod_autoscaling {
+      disabled = true # Disabling autoscaling
+    }
+    
+    network_policy_config {
+      disabled = true # Network policies disabled
+    }
+    
+    dns_cache_config {
+      enabled = false # DNS cache disabled for performance
+    }
+  }
+
+  # MISCONFIGURATION: No pod security policy
+  pod_security_policy_config {
+    enabled = false
+  }
+
+  # MISCONFIGURATION: Binary authorization disabled
+  binary_authorization {
+    evaluation_mode = "DISABLED"
+  }
+
+  # MISCONFIGURATION: No database encryption
+  database_encryption {
+    state    = "DECRYPTED"
+    key_name = ""
+  }
+
+  # MISCONFIGURATION: No network tags
+  node_config {
+    tags = ["vulnerable-gke-default"]
+  }
+}
+
+# GKE Node Pool with misconfigurations
+resource "google_container_node_pool" "vulnerable_nodes" {
+  name       = "vulnerable-node-pool"
+  location   = var.zone
+  cluster    = google_container_cluster.vulnerable_gke.name
+  node_count = 2
+
+  # MISCONFIGURATION: No autoscaling
+  # autoscaling {
+  #   min_node_count = 1
+  #   max_node_count = 3
+  # }
+
+  # MISCONFIGURATION: No upgrade settings
+  # upgrade_settings {
+  #   max_surge       = 1
+  #   max_unavailable = 0
+  # }
+
+  node_config {
+    preemptible  = true # MISCONFIGURATION: Preemptible for critical workload
+    machine_type = "e2-medium"
+
+    # MISCONFIGURATION: Full cloud-platform scope
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/cloud-platform"
+    ]
+
+    # MISCONFIGURATION: Overprivileged service account
+    service_account = google_service_account.overprivileged_sa.email
+
+    # MISCONFIGURATION: No shielded VM features
+    shielded_instance_config {
+      enable_secure_boot          = false
+      enable_integrity_monitoring = false
+    }
+
+    # MISCONFIGURATION: Unencrypted boot disk
+    disk_size_gb = 30
+    disk_type    = "pd-standard"
+    # No disk encryption specified
+
+    # MISCONFIGURATION: No workload metadata config
+    workload_metadata_config {
+      mode = "GCE_METADATA" # Exposes GCE metadata to pods
+    }
+
+    # MISCONFIGURATION: Insecure metadata
+    metadata = {
+      disable-legacy-endpoints = "false" # Legacy endpoints enabled
+    }
+
+    # MISCONFIGURATION: No resource limits
+    # No resource requests/limits defined
+
+    tags = ["vulnerable-nodes", "gke-nodes"]
+    
+    labels = {
+      environment = "test"
+      security = "low"
+    }
+
+    # MISCONFIGURATION: No taints to prevent scheduling of sensitive workloads
+  }
+
+  # MISCONFIGURATION: No management configuration
+  management {
+    auto_repair  = false
+    auto_upgrade = false
+  }
+}
+
+# Additional node pool for testing different configurations
+resource "google_container_node_pool" "spot_nodes" {
+  name       = "spot-node-pool"
+  location   = var.zone
+  cluster    = google_container_cluster.vulnerable_gke.name
+  node_count = 1
+
+  node_config {
+    # MISCONFIGURATION: Spot instances for critical workload
+    spot         = true
+    machine_type = "e2-small"
+
+    # MISCONFIGURATION: Default service account with editor role
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/devstorage.read_only",
+      "https://www.googleapis.com/auth/logging.write",
+      "https://www.googleapis.com/auth/monitoring",
+      "https://www.googleapis.com/auth/servicecontrol",
+      "https://www.googleapis.com/auth/service.management.readonly",
+      "https://www.googleapis.com/auth/trace.append",
+      # MISCONFIGURATION: Additional broad permissions
+      "https://www.googleapis.com/auth/cloud-platform"
+    ]
+
+    # MISCONFIGURATION: Local SSD without encryption
+    local_ssd_count = 1
+
+    # MISCONFIGURATION: No image type specified (uses default)
+    
+    tags = ["spot-nodes", "vulnerable"]
+  }
+}
+
+# GKE Autopilot cluster with misconfigurations (alternative approach)
+resource "google_container_cluster" "vulnerable_autopilot" {
+  name     = "csmp-test-vulnerable-autopilot"
+  location = var.region
+
+  # Enable Autopilot
+  enable_autopilot = true
+
+  # MISCONFIGURATION: Binary authorization disabled
+  binary_authorization {
+    evaluation_mode = "DISABLED"
+  }
+
+  # MISCONFIGURATION: No IP allocation policy restrictions
+  ip_allocation_policy {
+    cluster_ipv4_cidr_block  = "10.0.0.0/16"
+    services_ipv4_cidr_block = "10.1.0.0/16"
+  }
+
+  # MISCONFIGURATION: Private cluster but with public endpoint
+  private_cluster_config {
+    enable_private_nodes    = true
+    enable_private_endpoint = false # Public endpoint enabled
+    master_ipv4_cidr_block  = "172.16.0.0/28"
+  }
+
+  # MISCONFIGURATION: Master authorized networks too broad
+  master_authorized_networks_config {
+    cidr_blocks {
+      cidr_block   = "0.0.0.0/0"
+      display_name = "All networks"
+    }
+  }
+}

@@ -1,0 +1,241 @@
+# storage.tf - Cloud Storage Resources with Misconfigurations
+
+# Cloud Storage bucket with misconfigurations
+resource "google_storage_bucket" "vulnerable_bucket" {
+  name     = "csmp-test-vulnerable-bucket-${random_string.bucket_suffix.result}"
+  location = "US"
+
+  # MISCONFIGURATION: Public access allowed
+  uniform_bucket_level_access = false
+
+  # MISCONFIGURATION: No versioning
+  versioning {
+    enabled = false
+  }
+
+  # MISCONFIGURATION: No lifecycle rules (objects never expire)
+  # No lifecycle configuration means objects accumulate indefinitely
+
+  # MISCONFIGURATION: No retention policy
+  # No retention_policy block means no minimum retention
+
+  # MISCONFIGURATION: Default encryption (not customer-managed)
+  # No encryption block means using Google-managed keys
+
+  # MISCONFIGURATION: No logging configuration
+  # No logging block means access logs are not stored
+
+  # MISCONFIGURATION: No website configuration restrictions
+  website {
+    main_page_suffix = "index.html"
+    not_found_page   = "404.html"
+  }
+
+  # MISCONFIGURATION: CORS policy too permissive
+  cors {
+    origin          = ["*"]
+    method          = ["GET", "HEAD", "PUT", "POST", "DELETE"]
+    response_header = ["*"]
+    max_age_seconds = 3600
+  }
+
+  labels = {
+    environment = "test"
+    contains-pii = "true"
+    public-access = "allowed"
+  }
+}
+
+# Make bucket publicly readable (MISCONFIGURATION)
+resource "google_storage_bucket_iam_member" "public_read" {
+  bucket = google_storage_bucket.vulnerable_bucket.name
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+}
+
+# Make bucket publicly writable (SEVERE MISCONFIGURATION)
+resource "google_storage_bucket_iam_member" "public_write" {
+  bucket = google_storage_bucket.vulnerable_bucket.name
+  role   = "roles/storage.objectCreator"
+  member = "allUsers"
+}
+
+# Upload sensitive test data
+resource "google_storage_bucket_object" "sensitive_data" {
+  name   = "sensitive-data.txt"
+  bucket = google_storage_bucket.vulnerable_bucket.name
+  content = <<-EOF
+    SENSITIVE DATA FOR TESTING:
+    SSN: 123-45-6789
+    Credit Card: 4111-1111-1111-1111
+    Driver License: DL123456789
+    Medical Record ID: MR987654321
+    Bank Account: 1234567890
+    API Key: sk-1234567890abcdef
+    Database Password: vulnerable_db_pass_123
+    JWT Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  EOF
+
+  # MISCONFIGURATION: No object-level encryption
+  # MISCONFIGURATION: Public object
+}
+
+# Upload configuration file with secrets
+resource "google_storage_bucket_object" "config_with_secrets" {
+  name   = "app-config.json"
+  bucket = google_storage_bucket.vulnerable_bucket.name
+  content = jsonencode({
+    database = {
+      host     = "vulnerable-db.example.com"
+      username = "admin"
+      password = "vulnerable_password_123"
+      port     = 3306
+    }
+    api_keys = {
+      stripe = "sk_test_vulnerable_key_123"
+      aws    = "AKIA1234567890ABCDEF"
+    }
+    jwt_secret = "vulnerable_jwt_secret_key"
+    encryption_key = "1234567890abcdef"
+  })
+
+  content_type = "application/json"
+}
+
+# Upload source code with hardcoded credentials
+resource "google_storage_bucket_object" "source_code" {
+  name   = "app.py"
+  bucket = google_storage_bucket.vulnerable_bucket.name
+  content = <<-EOF
+#!/usr/bin/env python3
+import os
+
+# MISCONFIGURATION: Hardcoded credentials in source code
+DATABASE_URL = "postgresql://admin:vulnerable_pass_123@db.example.com:5432/mydb"
+API_KEY = "sk-vulnerable_api_key_456"
+SECRET_KEY = "vulnerable_secret_key_789"
+
+def connect_database():
+    # Hardcoded connection string
+    connection = psycopg2.connect(
+        host="vulnerable-db.example.com",
+        database="sensitive_db",
+        user="admin", 
+        password="vulnerable_admin_pass"
+    )
+    return connection
+
+# More vulnerable code...
+  EOF
+
+  content_type = "text/plain"
+}
+
+# Second bucket for additional testing scenarios
+resource "google_storage_bucket" "logging_bucket" {
+  name     = "csmp-test-logging-bucket-${random_string.bucket_suffix.result}"
+  location = "US"
+
+  # MISCONFIGURATION: Public access for logging bucket
+  uniform_bucket_level_access = false
+
+  # MISCONFIGURATION: No lifecycle management for logs
+  # Logs will accumulate indefinitely
+
+  labels = {
+    purpose = "logging"
+    public-access = "enabled"
+  }
+}
+
+# Make logging bucket accessible to all authenticated users (MISCONFIGURATION)
+resource "google_storage_bucket_iam_member" "logging_public" {
+  bucket = google_storage_bucket.logging_bucket.name
+  role   = "roles/storage.objectViewer"
+  member = "allAuthenticatedUsers"
+}
+
+# Third bucket with different misconfigurations
+resource "google_storage_bucket" "backup_bucket" {
+  name     = "csmp-test-backup-bucket-${random_string.bucket_suffix.result}"
+  location = "US-CENTRAL1"
+
+  # MISCONFIGURATION: Versioning disabled for backups
+  versioning {
+    enabled = false
+  }
+
+  # MISCONFIGURATION: No requester pays (could lead to unexpected costs)
+  requester_pays = false
+
+  # MISCONFIGURATION: Default storage class not optimized
+  default_event_based_hold = false
+
+  labels = {
+    purpose = "backup"
+    encrypted = "false"
+    retention-policy = "none"
+  }
+}
+
+# Grant overly broad access to backup bucket
+resource "google_storage_bucket_iam_member" "backup_broad_access" {
+  bucket = google_storage_bucket.backup_bucket.name
+  role   = "roles/storage.admin"
+  member = "serviceAccount:${google_service_account.overprivileged_sa.email}"
+}
+
+# Create a bucket notification that could expose sensitive information
+resource "google_storage_notification" "vulnerable_notification" {
+  bucket         = google_storage_bucket.vulnerable_bucket.name
+  payload_format = "JSON_API_V1"
+  topic          = google_pubsub_topic.storage_notifications.id
+  
+  # MISCONFIGURATION: All event types monitored (could expose sensitive operations)
+  event_types = [
+    "OBJECT_FINALIZE",
+    "OBJECT_DELETE", 
+    "OBJECT_METADATA_UPDATE"
+  ]
+
+  depends_on = [google_pubsub_topic_iam_member.storage_notification_publisher]
+}
+
+# Pub/Sub topic for storage notifications (with misconfigurations)
+resource "google_pubsub_topic" "storage_notifications" {
+  name = "csmp-test-storage-notifications"
+
+  # MISCONFIGURATION: No message encryption
+  # MISCONFIGURATION: No message retention policy
+  
+  labels = {
+    purpose = "storage-notifications"
+    encrypted = "false"
+  }
+}
+
+# Grant publisher role to Cloud Storage service account
+data "google_storage_project_service_account" "gcs_account" {}
+
+resource "google_pubsub_topic_iam_member" "storage_notification_publisher" {
+  topic  = google_pubsub_topic.storage_notifications.id
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:${data.google_storage_project_service_account.gcs_account.email_address}"
+}
+
+# MISCONFIGURATION: Pub/Sub subscription with no authentication
+resource "google_pubsub_subscription" "storage_notifications_sub" {
+  name  = "csmp-test-storage-notifications-sub"
+  topic = google_pubsub_topic.storage_notifications.name
+
+  # MISCONFIGURATION: Long message retention
+  message_retention_duration = "1209600s" # 14 days
+
+  # MISCONFIGURATION: No dead letter policy
+  # MISCONFIGURATION: No expiration policy
+
+  labels = {
+    purpose = "storage-monitoring"
+    security = "low"
+  }
+}
