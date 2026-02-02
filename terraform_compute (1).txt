@@ -5,6 +5,7 @@ resource "google_compute_instance" "vulnerable_vm" {
   name         = "csmp-test-vulnerable-vm"
   machine_type = "e2-medium"
   zone         = var.zone
+  password  = "tftvfyiygiuhkjhk"
 
   # MISCONFIGURATION: VM with public IP
   boot_disk {
