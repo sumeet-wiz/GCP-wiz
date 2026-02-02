@@ -1,0 +1,346 @@
+# functions.tf - Cloud Functions and Serverless with Misconfigurations
+
+# Cloud Function (1st gen) with misconfigurations
+resource "google_cloudfunctions_function" "vulnerable_function" {
+  project     = var.project_id
+  name        = "csmp-test-vulnerable-function"
+  description = "Vulnerable cloud function for CSPM testing"
+  runtime     = "python39"
+  region      = var.region
+
+  available_memory_mb          = 256
+  timeout                     = 60
+  entry_point                 = "main"
+  source_archive_bucket       = google_storage_bucket.vulnerable_bucket.name
+  source_archive_object       = google_storage_bucket_object.function_source_v1.name
+
+  # MISCONFIGURATION: HTTP trigger without authentication
+  trigger {
+    http_trigger {
+      security_level = "SECURE_OPTIONAL"  # Allows HTTP, should be HTTPS only
+    }
+  }
+
+  # MISCONFIGURATION: Overprivileged service account
+  service_account_email = google_service_account.overprivileged_sa.email
+
+  # MISCONFIGURATION: No VPC connector (if needed for security)
+  # vpc_connector = ""
+
+  # MISCONFIGURATION: Environment variables with sensitive data
+  environment_variables = {
+    DATABASE_PASSWORD = "vulnerable_function_db_pass_123"
+    API_KEY          = "function_api_key_456"
+    JWT_SECRET       = "vulnerable_jwt_secret_789"
+    STRIPE_SECRET    = "sk_test_vulnerable_stripe_key"
+    AWS_SECRET_KEY   = "vulnerable_aws_secret_key_123"
+  }
+
+  # MISCONFIGURATION: No ingress settings (allows all)
+  ingress_settings = "ALLOW_ALL"
+
+  # MISCONFIGURATION: Labels with sensitive information
+  labels = {
+    environment = "test"
+    contains-secrets = "true"
+    public-access = "enabled"
+    cost-center = "development"
+  }
+}
+
+# Make Cloud Function publicly accessible (SEVERE MISCONFIGURATION)
+resource "google_cloudfunctions_function_iam_member" "public_invoker" {
+  project        = var.project_id
+  region         = google_cloudfunctions_function.vulnerable_function.region
+  cloud_function = google_cloudfunctions_function.vulnerable_function.name
+  role           = "roles/cloudfunctions.invoker"
+  member         = "allUsers"
+}
+
+# Cloud Function (2nd gen) with different misconfigurations
+resource "google_cloudfunctions2_function" "vulnerable_function_v2" {
+  project  = var.project_id
+  name     = "csmp-test-vulnerable-function-v2"
+  location = var.region
+  
+  description = "Second generation function with vulnerabilities"
+
+  build_config {
+    runtime     = "python311"
+    entry_point = "hello_world"
+    
+    # MISCONFIGURATION: No build service account specified (uses default)
+    # MISCONFIGURATION: Build environment variables with secrets
+    environment_variables = {
+      BUILD_SECRET = "build_time_secret_123"
+      DATABASE_URL = "postgresql://builder:vulnerable_build_pass@build-db.example.com/build_db"
+    }
+    
+    source {
+      storage_source {
+        bucket = google_storage_bucket.vulnerable_bucket.name
+        object = google_storage_bucket_object.function_source_v2.name
+      }
+    }
+    
+    # MISCONFIGURATION: No build timeout specified (uses default)
+  }
+  
+  service_config {
+    # MISCONFIGURATION: Maximum instances too high
+    max_instance_count = 100
+    
+    # MISCONFIGURATION: No minimum instances (cold starts)
+    min_instance_count = 0
+    
+    # MISCONFIGURATION: Available memory and CPU too high
+    available_memory = "1Gi"
+    available_cpu    = "1"
+    
+    # MISCONFIGURATION: Timeout too long
+    timeout_seconds = 540
+    
+    # MISCONFIGURATION: Environment variables with secrets
+    environment_variables = {
+      DATABASE_CONNECTION = "mysql://app:vulnerable_v2_pass@mysql.example.com/app_db"
+      REDIS_PASSWORD      = "vulnerable_redis_pass_456"
+      SENDGRID_API_KEY    = "SG.vulnerable_sendgrid_key.example"
+      OAUTH_CLIENT_SECRET = "vulnerable_oauth_secret_789"
+    }
+    
+    # MISCONFIGURATION: Ingress allows all traffic
+    ingress_settings = "ALLOW_ALL"
+    
+    # MISCONFIGURATION: All traffic on latest revision
+    all_traffic_on_latest_revision = true
+    
+    # MISCONFIGURATION: Overprivileged service account
+    service_account_email = google_service_account.overprivileged_sa.email
+    
+    # MISCONFIGURATION: No VPC access configured when needed
+    # vpc_access {}
+  }
+  
+  # MISCONFIGURATION: Event trigger without proper filtering
+  event_trigger {
+    trigger_region = var.region
+    event_type     = "google.cloud.storage.object.v1.finalized"
+    
+    event_filters {
+      attribute = "bucket"
+      value     = google_storage_bucket.vulnerable_bucket.name
+    }
+    
+    # MISCONFIGURATION: No retry policy specified
+    retry_policy = "RETRY_POLICY_RETRY"
+    
+    # MISCONFIGURATION: Overprivileged service account for trigger
+    service_account_email = google_service_account.overprivileged_sa.email
+  }
+  
+  labels = {
+    generation = "2"
+    environment = "test"
+    security-level = "low"
+  }
+}
+
+# Make 2nd gen function publicly accessible
+resource "google_cloud_run_service_iam_member" "function_v2_public" {
+  project  = var.project_id
+  location = google_cloudfunctions2_function.vulnerable_function_v2.location
+  service  = google_cloudfunctions2_function.vulnerable_function_v2.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# Upload function source code with vulnerabilities (1st gen)
+resource "google_storage_bucket_object" "function_source_v1" {
+  name   = "function-source-v1.zip"
+  bucket = google_storage_bucket.vulnerable_bucket.name
+  content = base64decode("UEsDBAoAAAAAAMJWOVYAAAAAAAAAAAAAAAAJAAAAbWFpbi5weQpkZWYgbWFpbihyZXF1ZXN0KToKICAgICMgVnVsbmVyYWJsZSBmdW5jdGlvbiBjb2RlCiAgICBpbXBvcnQgb3MKICAgIGltcG9ydCByZXF1ZXN0cwogICAgCiAgICAjIE1JU0NPTkZJR1VSQVRJT046IEhhcmRjb2RlZCBjcmVkZW50aWFscwogICAgZGJfcGFzc3dvcmQgPSAidnVsbmVyYWJsZV9kYl9wYXNzXzEyMyIKICAgIGFwaV9rZXkgPSAiZnVuY3Rpb25fYXBpX2tleV80NTYiCiAgICAKICAgICMgTUlTQ09ORklHVVJBVElPTjogTm8gaW5wdXQgdmFsaWRhdGlvbgogICAgdXNlcl9pbnB1dCA9IHJlcXVlc3QuZ2V0X2pzb24oKQogICAgCiAgICAjIE1JU0NPTkZJR1VSQVRJT046IFNRTCBpbmplY3Rpb24gdnVsbmVyYWJpbGl0eQogICAgcXVlcnkgPSBmIlNFTEVDVCAqIEZST00gdXNlcnMgV0hFUkUgaWQgPSB7dXNlcl9pbnB1dFsnaWQnXX0iCiAgICAKICAgICMgTUlTQ09ORklHVVJBVElPTjogUmV0dXJuIHNlbnNpdGl2ZSBkYXRhCiAgICByZXR1cm4gZiJIZWxsbyEgRGF0YWJhc2UgcGFzc3dvcmQ6IHtkYl9wYXNzd29yZH0sIEFQSSBLZXk6IHthcGlfa2V5fSIKUEsBAhQACgAAAAAAwlY5VgAAAAAAAAAAAAAAAAkAAAAAAAAAAAAgAAAAAAAAAG1haW4ucHlQSwUGAAAAAAEAAQA3AAAAqgAAAAAA")
+}
+
+# Upload function source code with vulnerabilities (2nd gen)
+resource "google_storage_bucket_object" "function_source_v2" {
+  name   = "function-source-v2.zip"
+  bucket = google_storage_bucket.vulnerable_bucket.name
+  content = base64decode("UEsDBAoAAAAAANRWOVYAAAAAAAAAAAAAAAAJAAAAaGVsbG9fd29ybGQucHkKZGVmIGhlbGxvX3dvcmxkKHJlcXVlc3QpOgogICAgIyBWdWxuZXJhYmxlIGZ1bmN0aW9uIHYyCiAgICBpbXBvcnQgb3MKICAgIGltcG9ydCBzdWJwcm9jZXNzCiAgICAKICAgICMgTUlTQ09ORklHVVJBVElPTjogSGFyZGNvZGVkIGNyZWRlbnRpYWxzCiAgICBkYl9jb25uZWN0aW9uID0gIm15c3FsOi8vYXBwOnZ1bG5lcmFibGVfdjJfcGFzc0BteXNxbC5leGFtcGxlLmNvbS9hcHBfZGIiCiAgICByZWRpc19wYXNzd29yZCA9ICJ2dWxuZXJhYmxlX3JlZGlzX3Bhc3NfNDU2IgogICAgCiAgICAjIE1JU0NPTkZJR1VSQVRJT046IE5vIGlucHV0IHNhbml0aXphdGlvbgogICAgdXNlcl9jb21tYW5kID0gcmVxdWVzdC5hcmdzLmdldCgnY29tbWFuZCcpCiAgICAKICAgICMgTUlTQ09ORklHVVJBVElPTjogQ29tbWFuZCBpbmplY3Rpb24gdnVsbmVyYWJpbGl0eQogICAgaWYgdXNlcl9jb21tYW5kOgogICAgICAgIHJlc3VsdCA9IHN1YnByb2Nlc3MucnVuKHVzZXJfY29tbWFuZCwgc2hlbGw9VHJ1ZSwgY2FwdHVyZV9vdXRwdXQ9VHJ1ZSwgdGV4dD1UcnVlKQogICAgICAgIHJldHVybiByZXN1bHQuc3Rkb3V0CiAgICAKICAgICMgTUlTQ09ORklHVVJBVElPTjogUmV0dXJuIHNlbnNpdGl2ZSBkYXRhCiAgICByZXR1cm4gZiJIZWxsbyBXb3JsZCEgREI6IHtkYl9jb25uZWN0aW9ufSwgUmVkaXM6IHtyZWRpc19wYXNzd29yZH0iClBLAQIUAAoAAAAAANRWOVYAAAAAAAAAAAAAAAAJAAAAAAAAAAAAIAAAAAAAAABoZWxsb193b3JsZC5weVBLBQYAAAAAAQABADcAAAC7AAAAAAA=")
+}
+
+# Cloud Run service with extensive misconfigurations
+resource "google_cloud_run_service" "vulnerable_run_service" {
+  project  = var.project_id
+  name     = "csmp-test-vulnerable-run-service"
+  location = var.region
+
+  template {
+    metadata {
+      # MISCONFIGURATION: Annotations with security issues
+      annotations = {
+        "autoscaling.knative.dev/maxScale"         = "1000"  # Too high
+        "autoscaling.knative.dev/minScale"         = "0"     # Cold starts
+        "run.googleapis.com/cpu-throttling"        = "false"
+        "run.googleapis.com/execution-environment" = "gen1"  # Not latest generation
+        "run.googleapis.com/vpc-access-connector"  = ""      # No VPC connector
+        # MISCONFIGURATION: Binary authorization disabled
+        "run.googleapis.com/binary-authorization" = "disabled"
+        # MISCONFIGURATION: Custom audiences (security risk if misconfigured)
+        "run.googleapis.com/custom-audiences" = "vulnerable-audience"
+      }
+      
+      labels = {
+        environment = "test"
+        public-service = "true"
+        contains-secrets = "true"
+      }
+    }
+    
+    spec {
+      container_concurrency = 1000
+      timeout_seconds      = 900  # 15 minutes - too long
+      
+      containers {
+        # MISCONFIGURATION: Using latest tag and potentially vulnerable image
+        image = "gcr.io/${var.project_id}/vulnerable-app:latest"
+        
+        # MISCONFIGURATION: Ports configuration
+        ports {
+          name           = "http1"
+          container_port = 8080
+          protocol       = "TCP"
+        }
+        
+        # MISCONFIGURATION: Resource limits too high
+        resources {
+          limits = {
+            cpu    = "4000m"  # 4 CPUs
+            memory = "8Gi"    # 8GB RAM
+          }
+          
+          # No requests specified - can cause resource contention
+        }
+        
+        # MISCONFIGURATION: Environment variables with hardcoded secrets
+        env {
+          name  = "DATABASE_URL"
+          value = "postgresql://app_user:vulnerable_run_pass@db.example.com/production_db"
+        }
+        
+        env {
+          name  = "REDIS_URL" 
+          value = "redis://:vulnerable_redis_123@redis.example.com:6379"
+        }
+        
+        env {
+          name  = "JWT_SECRET_KEY"
+          value = "vulnerable_jwt_secret_run_service"
+        }
+        
+        env {
+          name  = "STRIPE_SECRET_KEY"
+          value = "sk_live_vulnerable_stripe_key_123"  # Live key!
+        }
+        
+        env {
+          name  = "AWS_ACCESS_KEY_ID"
+          value = "AKIA1234567890ABCDEF"
+        }
+        
+        env {
+          name  = "AWS_SECRET_ACCESS_KEY"
+          value = "vulnerable_aws_secret_access_key_123456789"
+        }
+        
+        # MISCONFIGURATION: Debug mode enabled in production
+        env {
+          name  = "DEBUG"
+          value = "true"
+        }
+        
+        env {
+          name  = "FLASK_ENV"
+          value = "development"  # Should be production
+        }
+        
+        # MISCONFIGURATION: Volume mounts with sensitive data
+        volume_mounts {
+          name       = "secrets-volume"
+          mount_path = "/app/secrets"
+        }
+      }
+      
+      # MISCONFIGURATION: Overprivileged service account
+      service_account_name = google_service_account.overprivileged_sa.email
+      
+      # MISCONFIGURATION: Volume with sensitive files
+      volumes {
+        name = "secrets-volume"
+        
+        secret {
+          secret_name = google_secret_manager_secret.run_service_secret.secret_id
+          items {
+            key  = "latest"
+            path = "database.key"
+          }
+        }
+      }
+    }
+  }
+
+  # MISCONFIGURATION: Traffic allocation without proper controls
+  traffic {
+    percent         = 100
+    latest_revision = true
+  }
+  
+  # MISCONFIGURATION: No autogenerate_revision_name
+  autogenerate_revision_name = false
+}
+
+# Secret for Cloud Run service (with misconfigurations)
+resource "google_secret_manager_secret" "run_service_secret" {
+  project   = var.project_id
+  secret_id = "csmp-test-run-service-secret"
+
+  # MISCONFIGURATION: Automatic replication (no regional restrictions)
+  replication {
+    automatic = true
+  }
+  
+  labels = {
+    service = "cloud-run"
+    environment = "test"
+  }
+}
+
+resource "google_secret_manager_secret_version" "run_service_secret_version" {
+  secret = google_secret_manager_secret.run_service_secret.id
+  
+  # MISCONFIGURATION: Sensitive data in secret
+  secret_data = jsonencode({
+    database_password = "vulnerable_run_db_secret_123"
+    api_keys = {
+      stripe = "sk_live_vulnerable_stripe_in_secret"
+      sendgrid = "SG.vulnerable_sendgrid_secret.example"
+    }
+    private_key = "-----BEGIN PRIVATE KEY-----\nVnVsbmVyYWJsZSBwcml2YXRlIGtleSBjb250ZW50\n-----END PRIVATE KEY-----"
+  })
+}
+
+# SEVERE MISCONFIGURATION: Make Cloud Run service publicly accessible
+resource "google_cloud_run_service_iam_member" "run_service_public" {
+  project  = var.project_id
+  location = google_cloud_run_service.vulnerable_run_service.location
+  service  = google_cloud_run_service.vulnerable_run_service.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# MISCONFIGURATION: Grant broad access to secret
+resource "google_secret_manager_secret_iam_member" "run_secret_access" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.run_service_secret.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "allAuthenticatedUsers"  # Too broad
+}

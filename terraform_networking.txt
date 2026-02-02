@@ -1,0 +1,311 @@
+# networking.tf - Networking Resources with Misconfigurations
+
+# VPC with misconfigurations
+resource "google_compute_network" "vulnerable_vpc" {
+  name                    = "csmp-test-vulnerable-vpc"
+  # MISCONFIGURATION: Auto-create subnets (less control)
+  auto_create_subnetworks = true
+  # MISCONFIGURATION: Legacy network (if this was set to true)
+  # routing_mode = "REGIONAL" # Default, but could be GLOBAL for better routing
+  
+  description = "Vulnerable VPC for CSPM testing with misconfigurations"
+}
+
+# Manual subnet with misconfigurations
+resource "google_compute_subnetwork" "vulnerable_subnet" {
+  name          = "csmp-test-vulnerable-subnet"
+  network       = google_compute_network.vulnerable_vpc.id
+  ip_cidr_range = "10.0.1.0/24"
+  region        = var.region
+
+  # MISCONFIGURATION: Private Google access disabled
+  private_ip_google_access = false
+  
+  # MISCONFIGURATION: Flow logs disabled
+  log_config {
+    aggregation_interval = "INTERVAL_10_MIN"
+    flow_sampling        = 0.5
+    metadata             = "INCLUDE_ALL_METADATA"
+    # But this resource might be missing entirely (logs disabled)
+  }
+
+  # MISCONFIGURATION: No secondary IP ranges for services
+  # This might cause issues with GKE and other services
+}
+
+# Firewall rule allowing all traffic (SEVERE MISCONFIGURATION)
+resource "google_compute_firewall" "allow_all" {
+  name    = "csmp-test-allow-all"
+  network = google_compute_network.vulnerable_vpc.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["0-65535"]
+  }
+
+  allow {
+    protocol = "udp"
+    ports    = ["0-65535"]
+  }
+
+  allow {
+    protocol = "icmp"
+  }
+
+  # MISCONFIGURATION: Allow from anywhere
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["vulnerable"]
+  
+  description = "MISCONFIGURATION: Allow all traffic from anywhere"
+}
+
+# Firewall rule allowing SSH from everywhere (MISCONFIGURATION)
+resource "google_compute_firewall" "allow_ssh_all" {
+  name    = "csmp-test-allow-ssh-all"
+  network = google_compute_network.vulnerable_vpc.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  # MISCONFIGURATION: SSH allowed from anywhere
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["ssh-accessible"]
+  
+  description = "MISCONFIGURATION: SSH access from anywhere"
+}
+
+# Firewall rule allowing RDP from everywhere (MISCONFIGURATION)
+resource "google_compute_firewall" "allow_rdp_all" {
+  name    = "csmp-test-allow-rdp-all"
+  network = google_compute_network.vulnerable_vpc.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["3389"]
+  }
+
+  # MISCONFIGURATION: RDP allowed from anywhere
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["rdp-accessible"]
+  
+  description = "MISCONFIGURATION: RDP access from anywhere"
+}
+
+# Firewall rule allowing database ports (MISCONFIGURATION)
+resource "google_compute_firewall" "allow_database_ports" {
+  name    = "csmp-test-allow-database-ports"
+  network = google_compute_network.vulnerable_vpc.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["3306", "5432", "1433", "27017", "6379"]  # MySQL, PostgreSQL, SQL Server, MongoDB, Redis
+  }
+
+  # MISCONFIGURATION: Database ports accessible from anywhere
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["database"]
+  
+  description = "MISCONFIGURATION: Database ports accessible from anywhere"
+}
+
+# Firewall rule allowing web traffic but too permissive
+resource "google_compute_firewall" "allow_web_broad" {
+  name    = "csmp-test-allow-web-broad"
+  network = google_compute_network.vulnerable_vpc.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["80", "443", "8080", "8443", "9000-9999"]
+  }
+
+  # MISCONFIGURATION: Too many ports allowed
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["web-server"]
+  
+  description = "MISCONFIGURATION: Too many web ports allowed"
+}
+
+# Load balancer without SSL (MISCONFIGURATION)
+resource "google_compute_global_forwarding_rule" "vulnerable_lb" {
+  name       = "csmp-test-vulnerable-lb"
+  target     = google_compute_target_http_proxy.vulnerable_proxy.id
+  port_range = "80"
+  # MISCONFIGURATION: No HTTPS/SSL termination
+  
+  description = "MISCONFIGURATION: HTTP-only load balancer"
+}
+
+resource "google_compute_target_http_proxy" "vulnerable_proxy" {
+  name    = "csmp-test-vulnerable-proxy"
+  url_map = google_compute_url_map.vulnerable_url_map.id
+  # MISCONFIGURATION: HTTP only, no HTTPS
+  
+  description = "MISCONFIGURATION: HTTP-only proxy"
+}
+
+resource "google_compute_url_map" "vulnerable_url_map" {
+  name = "csmp-test-vulnerable-url-map"
+
+  default_service = google_compute_backend_service.vulnerable_backend.id
+  
+  # MISCONFIGURATION: No path-based routing rules
+  # MISCONFIGURATION: No host-based routing rules
+  
+  description = "MISCONFIGURATION: Basic URL map without security rules"
+}
+
+resource "google_compute_backend_service" "vulnerable_backend" {
+  name        = "csmp-test-vulnerable-backend"
+  protocol    = "HTTP"  # MISCONFIGURATION: HTTP instead of HTTPS
+  timeout_sec = 30
+
+  # MISCONFIGURATION: No health checks defined
+  # MISCONFIGURATION: No backends defined
+  
+  # MISCONFIGURATION: No security policy attached
+  # MISCONFIGURATION: No CDN enabled
+  enable_cdn = false
+  
+  # MISCONFIGURATION: No connection draining timeout
+  connection_draining_timeout_sec = 0
+  
+  description = "MISCONFIGURATION: Backend service without health checks"
+}
+
+# Cloud NAT with misconfigurations
+resource "google_compute_router" "vulnerable_router" {
+  name    = "csmp-test-vulnerable-router"
+  region  = var.region
+  network = google_compute_network.vulnerable_vpc.id
+
+  # MISCONFIGURATION: No BGP configuration for advanced routing
+  description = "Router for vulnerable NAT configuration"
+}
+
+resource "google_compute_router_nat" "vulnerable_nat" {
+  name                               = "csmp-test-vulnerable-nat"
+  router                             = google_compute_router.vulnerable_router.name
+  region                             = var.region
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+
+  # MISCONFIGURATION: No logging enabled
+  log_config {
+    enable = false
+    filter = "ERRORS_ONLY"
+  }
+  
+  # MISCONFIGURATION: No minimum ports per VM specified
+  # MISCONFIGURATION: No timeout configurations
+  
+  # MISCONFIGURATION: UDP idle timeout too long
+  udp_idle_timeout_sec = 120
+  
+  # MISCONFIGURATION: TCP established timeout too long  
+  tcp_established_idle_timeout_sec = 7200
+}
+
+# VPN Gateway with misconfigurations
+resource "google_compute_vpn_gateway" "vulnerable_vpn_gw" {
+  name    = "csmp-test-vulnerable-vpn-gw"
+  network = google_compute_network.vulnerable_vpc.id
+  region  = var.region
+
+  description = "MISCONFIGURATION: VPN gateway without proper configuration"
+}
+
+resource "google_compute_address" "vpn_static_ip" {
+  name   = "csmp-test-vpn-static-ip"
+  region = var.region
+  
+  description = "Static IP for vulnerable VPN"
+}
+
+# VPN tunnel with weak configuration
+resource "google_compute_vpn_tunnel" "vulnerable_tunnel" {
+  name          = "csmp-test-vulnerable-tunnel"
+  peer_ip       = "203.0.113.12"  # Example peer IP
+  shared_secret = "weak_shared_secret_123"  # MISCONFIGURATION: Weak shared secret
+  
+  target_vpn_gateway = google_compute_vpn_gateway.vulnerable_vpn_gw.id
+  
+  # MISCONFIGURATION: Weak IKE version
+  ike_version = 1
+  
+  local_traffic_selector  = ["0.0.0.0/0"]  # MISCONFIGURATION: Too broad
+  remote_traffic_selector = ["0.0.0.0/0"]  # MISCONFIGURATION: Too broad
+
+  description = "MISCONFIGURATION: VPN tunnel with weak configuration"
+
+  depends_on = [
+    google_compute_forwarding_rule.fr_esp,
+    google_compute_forwarding_rule.fr_udp500,
+    google_compute_forwarding_rule.fr_udp4500,
+  ]
+}
+
+# Forwarding rules for VPN
+resource "google_compute_forwarding_rule" "fr_esp" {
+  name        = "csmp-test-fr-esp"
+  ip_protocol = "ESP"
+  ip_address  = google_compute_address.vpn_static_ip.address
+  target      = google_compute_vpn_gateway.vulnerable_vpn_gw.id
+  region      = var.region
+}
+
+resource "google_compute_forwarding_rule" "fr_udp500" {
+  name        = "csmp-test-fr-udp500"
+  ip_protocol = "UDP"
+  port_range  = "500"
+  ip_address  = google_compute_address.vpn_static_ip.address
+  target      = google_compute_vpn_gateway.vulnerable_vpn_gw.id
+  region      = var.region
+}
+
+resource "google_compute_forwarding_rule" "fr_udp4500" {
+  name        = "csmp-test-fr-udp4500"
+  ip_protocol = "UDP"
+  port_range  = "4500"
+  ip_address  = google_compute_address.vpn_static_ip.address
+  target      = google_compute_vpn_gateway.vulnerable_vpn_gw.id
+  region      = var.region
+}
+
+# Route with overly broad destination (MISCONFIGURATION)
+resource "google_compute_route" "vulnerable_route" {
+  name        = "csmp-test-vulnerable-route"
+  dest_range  = "0.0.0.0/0"  # MISCONFIGURATION: Route to anywhere
+  network     = google_compute_network.vulnerable_vpc.name
+  next_hop_ip = "10.0.1.1"
+  priority    = 100
+
+  description = "MISCONFIGURATION: Route with overly broad destination"
+}
+
+# Network security policy with weak rules
+resource "google_compute_security_policy" "vulnerable_policy" {
+  name = "csmp-test-vulnerable-policy"
+
+  # MISCONFIGURATION: Default rule allows all
+  rule {
+    action   = "allow"
+    priority = "2147483647"
+    
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+    
+    description = "MISCONFIGURATION: Default allow all rule"
+  }
+
+  # MISCONFIGURATION: No rate limiting rules
+  # MISCONFIGURATION: No geographic restrictions
+  # MISCONFIGURATION: No bot protection
+  
+  description = "MISCONFIGURATION: Security policy without proper restrictions"
+}

@@ -1,0 +1,463 @@
+# ai-ml.tf - AI/ML Services with Misconfigurations
+
+# BigQuery dataset with misconfigurations
+resource "google_bigquery_dataset" "vulnerable_dataset" {
+  project                     = var.project_id
+  dataset_id                  = "csmp_test_vulnerable_dataset"
+  description                 = "Vulnerable dataset for CSPM testing"
+  location                    = "US"
+  default_table_expiration_ms = null  # MISCONFIGURATION: No expiration
+
+  # MISCONFIGURATION: No access controls defined initially
+  # MISCONFIGURATION: No encryption specified (uses Google-managed)
+  # MISCONFIGURATION: No labels for classification
+
+  labels = {
+    environment = "test"
+    contains-pii = "true"
+    public-access = "enabled"
+  }
+}
+
+# Make BigQuery dataset publicly accessible (SEVERE MISCONFIGURATION)
+resource "google_bigquery_dataset_iam_member" "public_viewer" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.vulnerable_dataset.dataset_id
+  role       = "roles/bigquery.dataViewer"
+  member     = "allUsers"
+}
+
+# Grant broad access to BigQuery dataset
+resource "google_bigquery_dataset_iam_member" "broad_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.vulnerable_dataset.dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "allAuthenticatedUsers"
+}
+
+# BigQuery table with sensitive data
+resource "google_bigquery_table" "sensitive_table" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.vulnerable_dataset.dataset_id
+  table_id   = "sensitive_user_data"
+
+  # MISCONFIGURATION: No encryption at rest with customer keys
+  # MISCONFIGURATION: No expiration time
+  # MISCONFIGURATION: Schema allows PII data
+
+  schema = jsonencode([
+    {
+      name = "user_id"
+      type = "INTEGER"
+      mode = "REQUIRED"
+    },
+    {
+      name = "email"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "ssn"
+      type = "STRING"
+      mode = "NULLABLE"
+      description = "Social Security Number - SENSITIVE"
+    },
+    {
+      name = "credit_card"
+      type = "STRING"
+      mode = "NULLABLE"
+      description = "Credit Card Number - SENSITIVE"
+    },
+    {
+      name = "phone"
+      type = "STRING"
+      mode = "NULLABLE"
+    }
+  ])
+
+  labels = {
+    contains-pii = "true"
+    data-classification = "sensitive"
+  }
+}
+
+# Dataproc cluster with misconfigurations
+resource "google_dataproc_cluster" "vulnerable_dataproc" {
+  project = var.project_id
+  name    = "csmp-test-vulnerable-dataproc"
+  region  = var.region
+
+  cluster_config {
+    # MISCONFIGURATION: No preemptible instances for cost optimization
+    master_config {
+      num_instances = 1
+      machine_type  = "n1-standard-2"
+      
+      # MISCONFIGURATION: Boot disk not encrypted with customer keys
+      disk_config {
+        boot_disk_type    = "pd-ssd"
+        boot_disk_size_gb = 50
+        num_local_ssds    = 0
+      }
+    }
+
+    worker_config {
+      num_instances = 2
+      machine_type  = "n1-standard-1"
+      
+      # MISCONFIGURATION: Boot disk not encrypted with customer keys
+      disk_config {
+        boot_disk_type    = "pd-standard"
+        boot_disk_size_gb = 100
+        num_local_ssds    = 1  # MISCONFIGURATION: Local SSD without encryption
+      }
+    }
+
+    # MISCONFIGURATION: No preemptible worker config for cost savings
+
+    # MISCONFIGURATION: Network and security settings
+    gce_cluster_config {
+      zone = var.zone
+      
+      # MISCONFIGURATION: External IP addresses enabled
+      internal_ip_only = false
+
+      # MISCONFIGURATION: Overprivileged service account
+      service_account = google_service_account.overprivileged_sa.email
+      service_account_scopes = [
+        "cloud-platform"  # Full access
+      ]
+
+      # MISCONFIGURATION: No network tags for security
+      tags = ["dataproc", "vulnerable"]
+
+      # MISCONFIGURATION: No metadata restrictions
+      metadata = {
+        enable-cloud-sql-hive-metastore = "false"
+        # MISCONFIGURATION: Startup script with sensitive data
+        startup-script = "echo 'DATABASE_PASSWORD=vulnerable_dp_pass_123' >> /etc/environment"
+      }
+    }
+
+    # MISCONFIGURATION: No encryption at rest
+    encryption_config {
+      # No KMS key specified - uses Google-managed keys
+    }
+
+    # MISCONFIGURATION: Software with default/insecure configurations
+    software_config {
+      image_version = "2.0-debian10"  # May not be the latest
+      
+      # MISCONFIGURATION: Properties with insecure settings
+      properties = {
+        "core:hadoop.http.authentication.simple.anonymous.allowed" = "true"
+        "core:hadoop.security.authorization"                       = "false"
+        "yarn:yarn.log-aggregation-enable"                        = "false"
+      }
+
+      # MISCONFIGURATION: Optional components with security implications
+      optional_components = [
+        "JUPYTER",
+        "ZEPPELIN"
+      ]
+    }
+
+    # MISCONFIGURATION: No initialization actions for security hardening
+    initialization_action {
+      script      = "gs://${google_storage_bucket.vulnerable_bucket.name}/init-script.sh"
+      timeout_sec = 300
+    }
+  }
+
+  # MISCONFIGURATION: No labels for resource management
+  labels = {
+    environment = "test"
+    cost-center = "ml-team"
+    contains-sensitive-data = "true"
+  }
+}
+
+# Upload initialization script with vulnerabilities
+resource "google_storage_bucket_object" "dataproc_init_script" {
+  name    = "init-script.sh"
+  bucket  = google_storage_bucket.vulnerable_bucket.name
+  content = <<-EOF
+#!/bin/bash
+# MISCONFIGURATION: Insecure initialization script
+echo "Starting Dataproc initialization..."
+
+# MISCONFIGURATION: Hardcoded credentials
+export DATABASE_URL="postgresql://admin:vulnerable_pass@db.example.com/dataproc_db"
+export API_KEY="dataproc_api_key_123"
+
+# MISCONFIGURATION: Downloading and installing unverified packages
+wget -O /tmp/custom-package.tar.gz http://example.com/package.tar.gz
+tar -xzf /tmp/custom-package.tar.gz -C /opt/
+
+# MISCONFIGURATION: Setting insecure permissions
+chmod 777 /opt/shared-data/
+chmod 644 /etc/hadoop/conf/core-site.xml
+
+# MISCONFIGURATION: Disabling security features
+systemctl stop firewalld
+systemctl disable firewalld
+
+echo "Initialization completed"
+EOF
+}
+
+# Vertex AI Workbench instance with misconfigurations
+resource "google_notebooks_instance" "vulnerable_notebook" {
+  project      = var.project_id
+  name         = "csmp-test-vulnerable-notebook"
+  location     = var.zone
+  machine_type = "e2-medium"
+
+  # MISCONFIGURATION: VM image without latest security patches
+  vm_image {
+    project      = "deeplearning-platform-release"
+    image_family = "tf-ent-2-6-cu113-notebooks"
+  }
+
+  # MISCONFIGURATION: Instance not configured with private IP only
+  # no_public_ip = false  # Default allows public IP
+
+  # MISCONFIGURATION: No proxy access restrictions
+  # no_proxy_access = false
+
+  # MISCONFIGURATION: Root access enabled
+  no_remove_data_disk = true
+
+  # MISCONFIGURATION: Overprivileged service account
+  service_account = google_service_account.overprivileged_sa.email
+
+  # MISCONFIGURATION: Boot disk not encrypted with customer keys
+  boot_disk_type = "PD_SSD"
+  boot_disk_size_gb = 100
+
+  # MISCONFIGURATION: Data disk not encrypted with customer keys  
+  data_disk_type = "PD_SSD"
+  data_disk_size_gb = 300
+
+  # MISCONFIGURATION: No network tags for security
+  tags = ["notebook", "vulnerable", "ml-workbench"]
+
+  # MISCONFIGURATION: Metadata with sensitive information
+  metadata = {
+    framework                = "TensorFlow"
+    proxy-mode              = "service_account"
+    # MISCONFIGURATION: Sensitive data in metadata
+    database-connection-string = "postgresql://ml_user:vulnerable_ml_pass@db.example.com/ml_db"
+    api-endpoint               = "https://api.example.com/v1"
+    secret-key                 = "vulnerable_notebook_secret_456"
+  }
+
+  # MISCONFIGURATION: No reservation affinity for dedicated resources
+  # MISCONFIGURATION: No custom subnet specified
+
+  labels = {
+    environment = "test"
+    team = "ml-research"
+    contains-sensitive-data = "true"
+  }
+}
+
+# Vertex AI Dataset with misconfigurations
+resource "google_vertex_ai_dataset" "vulnerable_dataset" {
+  project      = var.project_id
+  display_name = "csmp-test-vulnerable-dataset"
+  location     = var.region
+  
+  # MISCONFIGURATION: No encryption specified
+  
+  # MISCONFIGURATION: Metadata schema allows PII
+  metadata_schema_uri = "gs://google-cloud-aiplatform/schema/dataset/metadata/image_1.0.0.yaml"
+
+  labels = {
+    environment = "test"
+    data-type = "sensitive"
+    public-access = "enabled"
+  }
+}
+
+# Vertex AI Model with misconfigurations
+resource "google_vertex_ai_model" "vulnerable_model" {
+  project      = var.project_id
+  name         = "csmp-test-vulnerable-model"
+  display_name = "Vulnerable ML Model"
+  location     = var.region
+
+  # MISCONFIGURATION: No version control
+  # MISCONFIGURATION: No model encryption specified
+  
+  # MISCONFIGURATION: Container spec with vulnerabilities
+  container_spec {
+    image_uri = "gcr.io/${var.project_id}/vulnerable-ml-model:latest"  # Latest tag
+    
+    # MISCONFIGURATION: Environment variables with secrets
+    env {
+      name  = "MODEL_API_KEY"
+      value = "vulnerable_model_api_key_789"
+    }
+    
+    env {
+      name  = "DATABASE_URL"
+      value = "mysql://model_user:vulnerable_model_pass@db.example.com/models_db"
+    }
+  }
+
+  # MISCONFIGURATION: Overly broad explanation configuration
+  explanation_spec {
+    parameters {
+      sampled_shapley_attribution {
+        path_count = 10
+      }
+    }
+    
+    metadata {
+      inputs = {
+        "input_tensor" = {
+          input_baselines = [0.0]
+        }
+      }
+    }
+  }
+
+  labels = {
+    model-type = "classification"
+    data-sensitivity = "high"
+    environment = "test"
+  }
+}
+
+# Vertex AI Endpoint with misconfigurations
+resource "google_vertex_ai_endpoint" "vulnerable_endpoint" {
+  project      = var.project_id
+  name         = "csmp-test-vulnerable-endpoint"
+  display_name = "Vulnerable ML Endpoint"
+  location     = var.region
+
+  # MISCONFIGURATION: No network configuration (public access)
+  # MISCONFIGURATION: No encryption in transit specified
+
+  labels = {
+    environment = "test"
+    access-level = "public"
+    model-type = "prediction"
+  }
+}
+
+# Cloud Composer (Airflow) environment with misconfigurations
+resource "google_composer_environment" "vulnerable_composer" {
+  project = var.project_id
+  name    = "csmp-test-vulnerable-composer"
+  region  = var.region
+
+  config {
+    # MISCONFIGURATION: Small node count for critical workflows
+    node_count = 3
+
+    # MISCONFIGURATION: Node configuration with security issues
+    node_config {
+      zone         = var.zone
+      machine_type = "n1-standard-1"
+      
+      # MISCONFIGURATION: Overprivileged service account
+      service_account = google_service_account.overprivileged_sa.email
+
+      # MISCONFIGURATION: Disk not encrypted with customer keys
+      disk_size_gb = 100
+      disk_type    = "pd-standard"
+
+      # MISCONFIGURATION: No network tags
+      tags = ["composer", "airflow", "vulnerable"]
+
+      # MISCONFIGURATION: Full cloud-platform scope
+      oauth_scopes = [
+        "https://www.googleapis.com/auth/cloud-platform"
+      ]
+    }
+
+    # MISCONFIGURATION: Software configuration with insecure settings
+    software_config {
+      image_version = "composer-1.18.4-airflow-2.2.5"  # May not be latest
+
+      # MISCONFIGURATION: Python packages with known vulnerabilities
+      pypi_packages = {
+        "requests" = "2.25.1"  # Potentially vulnerable version
+        "urllib3"  = "1.26.5"  # May have security issues
+      }
+
+      # MISCONFIGURATION: Airflow configuration with security issues
+      airflow_config_overrides = {
+        "webserver-expose_config" = "True"
+        "webserver-authenticate"  = "False"  # No authentication required
+        "api-auth_backend"        = ""       # No API authentication
+      }
+
+      # MISCONFIGURATION: Environment variables with secrets
+      env_variables = {
+        DATABASE_PASSWORD = "vulnerable_composer_pass_123"
+        API_SECRET_KEY    = "composer_api_secret_456"
+        SMTP_PASSWORD     = "smtp_vulnerable_pass_789"
+      }
+    }
+
+    # MISCONFIGURATION: No private IP configuration
+    private_environment_config {
+      enable_private_endpoint = false  # Public endpoint enabled
+    }
+  }
+
+  labels = {
+    environment = "test"
+    workflow-type = "data-pipeline"
+    contains-secrets = "true"
+  }
+}
+
+# AI Platform Training Job with misconfigurations (Legacy)
+resource "google_ml_engine_model" "vulnerable_ml_model" {
+  project = var.project_id
+  name    = "csmp_test_vulnerable_ml_model"
+
+  description = "Vulnerable ML model for CSPM testing"
+  
+  # MISCONFIGURATION: No regions specified (uses default)
+  # MISCONFIGURATION: No labels for resource management
+  
+  # MISCONFIGURATION: Default prediction class allows broad access
+  default_version {
+    name = "v1"
+  }
+
+  labels = {
+    environment = "test"
+    model-sensitivity = "high"
+  }
+}
+
+# AutoML Tables dataset with misconfigurations
+resource "google_bigquery_dataset" "automl_dataset" {
+  project                     = var.project_id
+  dataset_id                  = "csmp_test_automl_vulnerable"
+  description                 = "AutoML dataset with misconfigurations"
+  location                    = "US"
+  
+  # MISCONFIGURATION: No access controls
+  # MISCONFIGURATION: Public access through IAM bindings
+
+  labels = {
+    purpose = "automl"
+    data-classification = "sensitive"
+    environment = "test"
+  }
+}
+
+# Make AutoML dataset publicly accessible (SEVERE MISCONFIGURATION)
+resource "google_bigquery_dataset_iam_member" "automl_public_access" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.automl_dataset.dataset_id
+  role       = "roles/bigquery.dataViewer"
+  member     = "allUsers"
+}

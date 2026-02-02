@@ -1,0 +1,355 @@
+# containers.tf - Container and Registry Services with Misconfigurations
+
+# Artifact Registry with misconfigurations
+resource "google_artifact_registry_repository" "vulnerable_repo" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = "csmp-test-vulnerable-repo"
+  description   = "Vulnerable container repository for CSPM testing"
+  format        = "DOCKER"
+
+  # MISCONFIGURATION: No cleanup policies
+  # MISCONFIGURATION: No access restrictions
+  
+  labels = {
+    environment = "test"
+    security = "low"
+    public-access = "allowed"
+  }
+}
+
+# Make registry publicly accessible (SEVERE MISCONFIGURATION)
+resource "google_artifact_registry_repository_iam_member" "public_reader" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.vulnerable_repo.location
+  repository = google_artifact_registry_repository.vulnerable_repo.name
+  role       = "roles/artifactregistry.reader"
+  member     = "allUsers"
+}
+
+# Grant broad write access (MISCONFIGURATION)
+resource "google_artifact_registry_repository_iam_member" "broad_writer" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.vulnerable_repo.location
+  repository = google_artifact_registry_repository.vulnerable_repo.name
+  role       = "roles/artifactregistry.writer"
+  member     = "allAuthenticatedUsers"
+}
+
+# Cloud Build trigger with misconfigurations
+resource "google_cloudbuild_trigger" "vulnerable_trigger" {
+  project  = var.project_id
+  name     = "csmp-test-vulnerable-trigger"
+  description = "Vulnerable Cloud Build trigger for testing"
+
+  # MISCONFIGURATION: Trigger on any branch
+  github {
+    owner = "example-org"
+    name  = "example-repo"
+    
+    push {
+      branch = ".*"  # MISCONFIGURATION: Any branch triggers build
+    }
+  }
+
+  # MISCONFIGURATION: Build configuration with security issues
+  build {
+    step {
+      name = "gcr.io/cloud-builders/docker"
+      args = [
+        "build",
+        "-t", "gcr.io/${var.project_id}/vulnerable-app:$COMMIT_SHA",
+        "."
+      ]
+      # MISCONFIGURATION: No security scanning
+      # MISCONFIGURATION: No vulnerability checks
+    }
+    
+    step {
+      name = "gcr.io/cloud-builders/docker"
+      args = [
+        "push",
+        "gcr.io/${var.project_id}/vulnerable-app:$COMMIT_SHA"
+      ]
+    }
+    
+    # MISCONFIGURATION: Using overprivileged service account
+    options {
+      substitution_option = "ALLOW_LOOSE"
+      logging = "LEGACY"  # MISCONFIGURATION: Legacy logging
+      
+      # MISCONFIGURATION: No resource limits
+      machine_type = "UNSPECIFIED"
+      
+      # MISCONFIGURATION: Logs stored insecurely
+      log_streaming_option = "STREAM_DEFAULT"
+    }
+    
+    # MISCONFIGURATION: Build timeout too long
+    timeout = "1200s"
+    
+    # MISCONFIGURATION: Substitutions with sensitive data
+    substitutions = {
+      _DATABASE_PASSWORD = "vulnerable_db_pass_123"
+      _API_KEY          = "vulnerable_api_key_456"
+    }
+  }
+  
+  # MISCONFIGURATION: No approval required
+  # MISCONFIGURATION: No webhook verification
+  
+  # MISCONFIGURATION: Service account with excessive permissions
+  service_account = "projects/${var.project_id}/serviceAccounts/${google_service_account.overprivileged_sa.email}"
+}
+
+# Cloud Run service with misconfigurations
+resource "google_cloud_run_service" "vulnerable_service" {
+  project  = var.project_id
+  name     = "csmp-test-vulnerable-service"
+  location = var.region
+
+  template {
+    spec {
+      # MISCONFIGURATION: No resource limits
+      container_concurrency = 1000
+      timeout_seconds      = 300
+      
+      containers {
+        # MISCONFIGURATION: Using latest tag (unpinned)
+        image = "gcr.io/${var.project_id}/vulnerable-app:latest"
+        
+        # MISCONFIGURATION: Container runs as root
+        # No security_context specified
+        
+        # MISCONFIGURATION: Resource limits not set
+        resources {
+          limits = {
+            cpu    = "2000m"
+            memory = "2Gi"
+          }
+        }
+        
+        # MISCONFIGURATION: Environment variables with secrets
+        env {
+          name  = "DATABASE_PASSWORD"
+          value = "vulnerable_db_password_123"
+        }
+        
+        env {
+          name  = "API_KEY"
+          value = "sk-vulnerable_api_key_789"
+        }
+        
+        env {
+          name  = "JWT_SECRET"
+          value = "vulnerable_jwt_secret_key"
+        }
+        
+        # MISCONFIGURATION: Debug mode enabled
+        env {
+          name  = "DEBUG"
+          value = "true"
+        }
+        
+        # MISCONFIGURATION: Insecure ports
+        ports {
+          container_port = 8080
+          name          = "http1"
+          protocol      = "TCP"
+        }
+      }
+      
+      # MISCONFIGURATION: Overprivileged service account
+      service_account_name = google_service_account.overprivileged_sa.email
+    }
+    
+    metadata {
+      # MISCONFIGURATION: No VPC connector (if needed for security)
+      # MISCONFIGURATION: No ingress restrictions
+      annotations = {
+        "autoscaling.knative.dev/maxScale" = "100"
+        "run.googleapis.com/cpu-throttling" = "false"
+        # MISCONFIGURATION: Binary authorization disabled
+        "run.googleapis.com/binary-authorization" = "disabled"
+        # MISCONFIGURATION: Execution environment not specified
+        "run.googleapis.com/execution-environment" = "gen1"
+      }
+      
+      labels = {
+        environment = "test"
+        security-level = "low"
+        contains-secrets = "true"
+      }
+    }
+  }
+
+  # MISCONFIGURATION: No traffic allocation controls
+  traffic {
+    percent         = 100
+    latest_revision = true
+  }
+}
+
+# Make Cloud Run service publicly accessible (MISCONFIGURATION)
+resource "google_cloud_run_service_iam_member" "public_access" {
+  project  = var.project_id
+  location = google_cloud_run_service.vulnerable_service.location
+  service  = google_cloud_run_service.vulnerable_service.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# Container Registry (legacy) - still used for some scenarios
+# Note: This might not work in newer projects as Container Registry is deprecated
+# resource "google_container_registry" "vulnerable_gcr" {
+#   project  = var.project_id
+#   location = "US"
+# }
+
+# Grant public access to Container Registry (SEVERE MISCONFIGURATION)
+resource "google_storage_bucket_iam_member" "gcr_public_read" {
+  bucket = "artifacts.${var.project_id}.appspot.com"
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+  
+  # This assumes the GCR bucket exists
+  depends_on = [google_cloud_run_service.vulnerable_service]
+}
+
+# Cloud Functions with container-based deployment and misconfigurations
+resource "google_cloudfunctions2_function" "vulnerable_container_function" {
+  project  = var.project_id
+  name     = "csmp-test-vulnerable-container-function"
+  location = var.region
+  
+  build_config {
+    runtime     = "python39"
+    entry_point = "hello_world"
+    
+    # MISCONFIGURATION: No build environment security
+    environment_variables = {
+      BUILD_CONFIG_TEST = "build_secret_123"
+    }
+    
+    source {
+      storage_source {
+        bucket = google_storage_bucket.vulnerable_bucket.name
+        object = google_storage_bucket_object.function_source.name
+      }
+    }
+  }
+  
+  service_config {
+    # MISCONFIGURATION: Maximum instances too high
+    max_instance_count = 100
+    
+    # MISCONFIGURATION: No minimum instances (cold starts)
+    min_instance_count = 0
+    
+    # MISCONFIGURATION: Available memory too high
+    available_memory = "512M"
+    
+    # MISCONFIGURATION: Timeout too long
+    timeout_seconds = 540
+    
+    # MISCONFIGURATION: Environment variables with secrets
+    environment_variables = {
+      DATABASE_URL = "postgresql://admin:vulnerable_pass@db.example.com/mydb"
+      API_SECRET   = "vulnerable_api_secret_789"
+      ENCRYPTION_KEY = "1234567890abcdef"
+    }
+    
+    # MISCONFIGURATION: Ingress allows all
+    ingress_settings = "ALLOW_ALL"
+    
+    # MISCONFIGURATION: All traffic on latest revision
+    all_traffic_on_latest_revision = true
+    
+    # MISCONFIGURATION: Overprivileged service account
+    service_account_email = google_service_account.overprivileged_sa.email
+  }
+  
+  event_trigger {
+    # MISCONFIGURATION: Trigger on public events
+    trigger_region = var.region
+    event_type     = "google.cloud.storage.object.v1.finalized"
+    
+    event_filters {
+      attribute = "bucket"
+      value     = google_storage_bucket.vulnerable_bucket.name
+    }
+    
+    # MISCONFIGURATION: No retry policy
+    retry_policy = "RETRY_POLICY_UNSPECIFIED"
+  }
+}
+
+# App Engine application with misconfigurations
+resource "google_app_engine_application" "vulnerable_app" {
+  project     = var.project_id
+  location_id = var.region
+  
+  # MISCONFIGURATION: No authentication restrictions
+  # MISCONFIGURATION: Default service configuration
+}
+
+# App Engine service version with misconfigurations  
+resource "google_app_engine_standard_app_version" "vulnerable_version" {
+  project    = var.project_id
+  version_id = "v1"
+  service    = "default"
+  runtime    = "python39"
+  
+  # MISCONFIGURATION: No scaling limits
+  automatic_scaling {
+    max_concurrent_requests = 1000
+    max_idle_instances     = 10
+    min_idle_instances     = 1
+    
+    # MISCONFIGURATION: No resource limits
+    standard_scheduler_settings {
+      target_cpu_utilization        = 0.6
+      target_throughput_utilization = 0.6
+      min_instances                 = 1
+      max_instances                 = 20
+    }
+  }
+  
+  # MISCONFIGURATION: Environment variables with secrets
+  env_variables = {
+    DATABASE_PASSWORD = "vulnerable_app_db_pass"
+    SECRET_KEY       = "vulnerable_secret_key_123"
+    DEBUG_MODE       = "true"
+  }
+  
+  deployment {
+    zip {
+      source_url = "https://storage.googleapis.com/${google_storage_bucket.vulnerable_bucket.name}/app-source.zip"
+    }
+  }
+  
+  # MISCONFIGURATION: Insecure handlers
+  handlers {
+    url_regex        = "/.*"
+    script {
+      script_path = "main.app"
+    }
+    # MISCONFIGURATION: No authentication required
+    security_level = "OPTIONAL"
+    # MISCONFIGURATION: HTTP allowed
+    redirect_http_response_code = "REDIRECT_HTTP_RESPONSE_CODE_301"
+  }
+}
+
+# Upload app source with vulnerabilities
+resource "google_storage_bucket_object" "app_source" {
+  name   = "app-source.zip"
+  bucket = google_storage_bucket.vulnerable_bucket.name
+  source = "app-source.zip"  # You need to create this
+}
+
+resource "google_storage_bucket_object" "function_source" {
+  name   = "function-source.zip"
+  bucket = google_storage_bucket.vulnerable_bucket.name
+  content = "UEsDBAoAAAAAAKxWOVYAAAAAAAAAAAAAAAAJAAAAaGVsbG9fd29ybGQucHkKZGVmIGhlbGxvX3dvcmxkKHJlcXVlc3QpOgogICAgcmV0dXJuICdIZWxsbyBXb3JsZCEnClBLAQIUAAoAAAAAAKxWOVYAAAAAAAAAAAAAAAAJAAAAAAAAAAAAIAAAAAAAAABoZWxsb193b3JsZC5weVBLBQYAAAAAAQABADcAAAAkAAAAAAA="  # Base64 encoded zip
+}

@@ -1,0 +1,212 @@
+# compute.tf - Compute Engine Resources with Misconfigurations
+
+# Compute Engine VM with misconfigurations
+resource "google_compute_instance" "vulnerable_vm" {
+  name         = "csmp-test-vulnerable-vm"
+  machine_type = "e2-medium"
+  zone         = var.zone
+
+  # MISCONFIGURATION: VM with public IP
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-11"
+      size  = 20
+      type  = "pd-standard"
+      # MISCONFIGURATION: Unencrypted disk - no customer-managed encryption key
+    }
+  }
+
+  network_interface {
+    network = google_compute_network.vulnerable_vpc.name
+    # MISCONFIGURATION: Public IP assigned
+    access_config {
+      // Ephemeral public IP
+    }
+  }
+
+  # MISCONFIGURATION: Overly permissive service account
+  service_account {
+    email  = google_service_account.overprivileged_sa.email
+    scopes = ["cloud-platform"] # Full access scope
+  }
+
+  # MISCONFIGURATION: SSH keys in metadata
+  metadata = {
+    ssh-keys = "testuser:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7... testuser@example.com"
+    # MISCONFIGURATION: Enable OS Login not set
+    enable-oslogin = "false"
+    # MISCONFIGURATION: Sensitive data in metadata
+    database-password = "vulnerable_db_password_123"
+    api-key          = "sk-vulnerable_api_key_456"
+  }
+
+  # MISCONFIGURATION: Startup script with sensitive operations
+  metadata_startup_script = <<-EOF
+    #!/bin/bash
+    # MISCONFIGURATION: Installing packages without verification
+    apt-get update
+    apt-get install -y apache2
+    
+    # MISCONFIGURATION: Creating files with sensitive data
+    echo "database_password=vulnerable123" > /etc/app.conf
+    chmod 644 /etc/app.conf  # World readable
+    
+    # MISCONFIGURATION: Starting services on all interfaces
+    systemctl start apache2
+    systemctl enable apache2
+    
+    # MISCONFIGURATION: Firewall disabled
+    ufw disable
+  EOF
+
+  # MISCONFIGURATION: No secure boot or integrity monitoring
+  shielded_instance_config {
+    enable_secure_boot          = false
+    enable_vtpm                 = false
+    enable_integrity_monitoring = false
+  }
+
+  # MISCONFIGURATION: Allow stopping for maintenance (can be exploited)
+  allow_stopping_for_update = true
+
+  # MISCONFIGURATION: No deletion protection
+  deletion_protection = false
+
+  tags = ["vulnerable", "csmp-test", "public-access"]
+
+  # MISCONFIGURATION: Labels with sensitive information
+  labels = {
+    environment     = "test"
+    contains-pii    = "true"
+    security-level  = "low"
+    cost-center     = "engineering"
+    database-type   = "mysql"
+  }
+}
+
+# Second VM for additional testing scenarios
+resource "google_compute_instance" "vulnerable_vm_2" {
+  name         = "csmp-test-vulnerable-vm-2"
+  machine_type = "e2-small"
+  zone         = var.zone
+
+  boot_disk {
+    initialize_params {
+      image = "ubuntu-os-cloud/ubuntu-2004-lts"
+      # MISCONFIGURATION: Using deprecated image
+    }
+  }
+
+  network_interface {
+    network = google_compute_network.vulnerable_vpc.name
+    # MISCONFIGURATION: Public IP assigned
+    access_config {}
+  }
+
+  # MISCONFIGURATION: Using default service account with full access
+  service_account {
+    email  = "${var.project_id}-compute@developer.gserviceaccount.com"
+    scopes = ["cloud-platform"]
+  }
+
+  # MISCONFIGURATION: Preemptible instance for critical workload
+  scheduling {
+    preemptible = true
+  }
+
+  metadata = {
+    # MISCONFIGURATION: Serial port logging enabled (can expose sensitive data)
+    serial-port-enable = "true"
+    # MISCONFIGURATION: Block project SSH keys disabled
+    block-project-ssh-keys = "false"
+  }
+
+  tags = ["vulnerable", "preemptible", "serial-enabled"]
+}
+
+# Managed Instance Group with misconfigurations
+resource "google_compute_instance_template" "vulnerable_template" {
+  name         = "csmp-test-vulnerable-template"
+  machine_type = "e2-micro"
+
+  disk {
+    source_image = "debian-cloud/debian-11"
+    auto_delete  = true
+    boot         = true
+    # MISCONFIGURATION: No disk encryption
+  }
+
+  network_interface {
+    network = google_compute_network.vulnerable_vpc.name
+    # MISCONFIGURATION: External IP for all instances
+    access_config {}
+  }
+
+  # MISCONFIGURATION: Overprivileged service account
+  service_account {
+    email  = google_service_account.overprivileged_sa.email
+    scopes = ["cloud-platform"]
+  }
+
+  # MISCONFIGURATION: No security configurations
+  metadata = {
+    startup-script = "apt-get update && apt-get install -y nginx"
+  }
+
+  tags = ["vulnerable-mig"]
+}
+
+resource "google_compute_instance_group_manager" "vulnerable_mig" {
+  name = "csmp-test-vulnerable-mig"
+  zone = var.zone
+
+  version {
+    instance_template = google_compute_instance_template.vulnerable_template.id
+  }
+
+  base_instance_name = "vulnerable"
+  target_size        = 2
+
+  # MISCONFIGURATION: No auto-healing policies
+  # MISCONFIGURATION: No update policy defined
+}
+
+# Compute disk with misconfigurations
+resource "google_compute_disk" "vulnerable_disk" {
+  name = "csmp-test-vulnerable-disk"
+  type = "pd-standard"
+  zone = var.zone
+  size = 10
+
+  # MISCONFIGURATION: Unencrypted disk
+  # MISCONFIGURATION: No labels for classification
+  # MISCONFIGURATION: No snapshot schedule
+
+  labels = {
+    environment = "test"
+    contains-sensitive-data = "true"
+  }
+}
+
+# Attach vulnerable disk to VM
+resource "google_compute_attached_disk" "vulnerable_attachment" {
+  disk     = google_compute_disk.vulnerable_disk.id
+  instance = google_compute_instance.vulnerable_vm.id
+}
+
+# Compute snapshot with misconfigurations
+resource "google_compute_snapshot" "vulnerable_snapshot" {
+  project     = var.project_id
+  name        = "csmp-test-vulnerable-snapshot"
+  source_disk = google_compute_disk.vulnerable_disk.name
+  zone        = var.zone
+
+  # MISCONFIGURATION: No retention policy
+  # MISCONFIGURATION: Unencrypted snapshot
+  # MISCONFIGURATION: No access controls
+
+  labels = {
+    environment = "test"
+    automated   = "false"
+  }
+}

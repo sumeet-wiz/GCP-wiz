@@ -1,0 +1,83 @@
+# iam.tf - Identity and Access Management with Misconfigurations
+
+# Overprivileged service account (MISCONFIGURATION)
+resource "google_service_account" "overprivileged_sa" {
+  account_id   = "csmp-test-overprivileged-sa"
+  display_name = "CSMP Test Overprivileged Service Account"
+  description  = "Service account with excessive permissions for testing"
+}
+
+# Grant excessive permissions (MISCONFIGURATION)
+resource "google_project_iam_member" "sa_editor" {
+  project = var.project_id
+  role    = "roles/editor"
+  member  = "serviceAccount:${google_service_account.overprivileged_sa.email}"
+}
+
+resource "google_project_iam_member" "sa_owner" {
+  project = var.project_id
+  role    = "roles/owner"
+  member  = "serviceAccount:${google_service_account.overprivileged_sa.email}"
+}
+
+# Additional overprivileged roles (MISCONFIGURATION)
+resource "google_project_iam_member" "sa_security_admin" {
+  project = var.project_id
+  role    = "roles/iam.securityAdmin"
+  member  = "serviceAccount:${google_service_account.overprivileged_sa.email}"
+}
+
+resource "google_project_iam_member" "sa_service_account_admin" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountAdmin"
+  member  = "serviceAccount:${google_service_account.overprivileged_sa.email}"
+}
+
+# Service account key (MISCONFIGURATION - keys should be avoided)
+resource "google_service_account_key" "vulnerable_key" {
+  service_account_id = google_service_account.overprivileged_sa.name
+  public_key_type    = "TYPE_X509_PEM_FILE"
+}
+
+# Additional service account for testing different scenarios
+resource "google_service_account" "compute_sa" {
+  project      = var.project_id
+  account_id   = "csmp-test-compute-sa"
+  display_name = "CSMP Test Compute Service Account"
+  description  = "Service account for compute resources with excessive permissions"
+}
+
+# Grant compute admin role (MISCONFIGURATION)
+resource "google_project_iam_member" "compute_sa_admin" {
+  project = var.project_id
+  role    = "roles/compute.admin"
+  member  = "serviceAccount:${google_service_account.compute_sa.email}"
+}
+
+# Grant storage admin role (MISCONFIGURATION)
+resource "google_project_iam_member" "compute_sa_storage" {
+  project = var.project_id
+  role    = "roles/storage.admin"
+  member  = "serviceAccount:${google_service_account.compute_sa.email}"
+}
+
+# Create a user account with excessive permissions (if email provided)
+variable "test_user_email" {
+  description = "Test user email for IAM testing (optional)"
+  type        = string
+  default     = ""
+}
+
+resource "google_project_iam_member" "test_user_owner" {
+  count   = var.test_user_email != "" ? 1 : 0
+  project = var.project_id
+  role    = "roles/owner"
+  member  = "user:${var.test_user_email}"
+}
+
+# Output sensitive service account key (MISCONFIGURATION)
+output "service_account_key" {
+  description = "Service account private key (SENSITIVE - should not be exposed)"
+  value       = google_service_account_key.vulnerable_key.private_key
+  sensitive   = true
+}
