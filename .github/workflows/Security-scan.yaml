@@ -2,9 +2,9 @@ name: Security Scan
 
 on:
   pull_request:
-    branches: [ main, develop ]
-  push:
-    branches: [ main ]
+    # This triggers on PRs to ANY branch
+    branches: ['**']
+    types: [opened, synchronize, reopened]
 
 jobs:
   wiz-security-scan:
@@ -16,3 +16,4 @@ jobs:
     secrets:
       WIZ_CLIENT_ID: ${{ secrets.WIZ_CLIENT_ID }}
       WIZ_CLIENT_SECRET: ${{ secrets.WIZ_CLIENT_SECRET }}
+
