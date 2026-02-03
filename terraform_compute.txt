@@ -2,7 +2,7 @@
 
 # Compute Engine VM with misconfigurations
 resource "google_compute_instance" "vulnerable_vm" {
-  name         = "csmp-test-vulnerable-vm"
+  name         = "csmp-test-vulnerable-vm-s"
   machine_type = "e2-medium"
   zone         = var.zone
 
